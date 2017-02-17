@@ -190,27 +190,48 @@ public class AuthConfig {
     }
   }
 
-  private static AuthConfig.Builder parseDockerConfig(final Path configPath, String serverAddress)
+  private static AuthConfig.Builder parseDockerConfig(final Path configPath,
+                                                        final String serverAddress)
       throws IOException {
     checkNotNull(configPath);
     final AuthConfig.Builder authBuilder = AuthConfig.builder();
     final JsonNode authJson = extractAuthJson(configPath);
+    String serverAddressToUse = serverAddress;
+    boolean foundValidServerAddress = false;
 
-    if (isNullOrEmpty(serverAddress)) {
+    if (isNullOrEmpty(serverAddressToUse)) {
       final Iterator<String> servers = authJson.fieldNames();
       if (servers.hasNext()) {
-        serverAddress = servers.next();
+        serverAddressToUse = servers.next();
+        foundValidServerAddress = true;
       }
-    } else {
-      if (!authJson.has(serverAddress)) {
-        log.error("Could not find auth config for {}. Returning empty builder", serverAddress);
-        return AuthConfig.builder().serverAddress(serverAddress);
-      }
+    } else if (!authJson.has(serverAddressToUse)) {
+        final String[] potentialProtocols = {"http://", "https://"};
+
+        for (final String protocol : potentialProtocols) {
+          if (serverAddressToUse.startsWith(protocol)) {
+            final String serverAddressWithoutProtocol =
+                    serverAddressToUse.substring(protocol.length());
+            log.info("Looking for auth for serveraddress: {}", serverAddressWithoutProtocol);
+            if (authJson.has(serverAddressWithoutProtocol)) {
+              serverAddressToUse = serverAddressWithoutProtocol;
+              foundValidServerAddress = true;
+              break;
+            }
+          }
+        }
+      } else {
+        foundValidServerAddress = true;
     }
 
-    final JsonNode serverAuth = authJson.get(serverAddress);
+    if (!foundValidServerAddress) {
+      log.error("Could not find auth config for {}. Returning empty builder", serverAddressToUse);
+      return AuthConfig.builder().serverAddress(serverAddressToUse);
+    }
+
+    final JsonNode serverAuth = authJson.get(serverAddressToUse);
     if (serverAuth != null && serverAuth.has("auth")) {
-      authBuilder.serverAddress(serverAddress);
+      authBuilder.serverAddress(serverAddressToUse);
       final String authString = serverAuth.get("auth").asText();
       final String[] authParams = Base64.decodeAsString(authString).split(":");
 
